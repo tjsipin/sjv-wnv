@@ -1,0 +1,203 @@
+## Set working directory and (install and) load any packages
+
+```{r setup}
+knitr::opts_knit$set(root.dir = "~/network-storage/WNV/sjv-wnv/")
+library(dplyr)
+library(ggplot2)
+library(naniar)
+library(cowplot)
+```
+
+## View data
+
+### View bird data
+
+```{r}
+bird_files <- list.files("Data/birds", full.names = T)
+
+bird_data <- list()
+
+for(file in bird_files) {
+  bird_data[[file]] <- read.csv(file) %>% 
+    arrange(clust, Year) %>% 
+    group_by(clust, Year) %>% 
+    arrange(Month, .by_group = T) %>% 
+    ungroup()
+}
+
+for(df in bird_data){
+  print(summary(df))
+}
+```
+
+
+### View pool data
+
+```{r}
+pool_files <- list.files("Data/pools", full.names = T)
+
+pool_data <- list()
+
+for(file in pool_files) {
+  pool_data[[file]] <- read.csv(file) %>% 
+    arrange(clust, Year) %>% 
+    group_by(clust, Year) %>% 
+    arrange(Month, .by_group = T) %>% 
+    ungroup()
+}
+
+for(df in pool_data){
+  print(summary(df))
+}
+```
+
+Missing data here for the pooled mosquito data.
+
+
+### View sentinel data
+
+```{r}
+sentinel_files <- list.files("Data/sentinels", full.names = T)
+
+sentinel_data <- list()
+
+for(file in sentinel_files) {
+  sentinel_data[[file]] <- read.csv(file) %>% 
+    arrange(clust, Year) %>% 
+    group_by(clust, Year) %>% 
+    arrange(Month, .by_group = T) %>% 
+    ungroup()
+}
+
+for(df in sentinel_data){
+  print(summary(df))
+}
+```
+
+
+## Explore the missing data
+
+```{r, fig.width=8, fig.height=8}
+focus_data <- pool_data$`Data/pools/pool1500Lag0.csv`
+
+naniar::gg_miss_fct(focus_data %>% filter(!is.na(z)), fct = yrs)
+naniar::gg_miss_fct(focus_data %>% filter(!is.na(z)), fct = mnths)
+naniar::gg_miss_fct(focus_data %>% filter(!is.na(z)), fct = clust)
+naniar::gg_miss_fct(focus_data, fct = clust)
+
+focus_data %>% filter(is.na(z)) %>% select(mnths, yrs, clust, everything())
+
+# see unique missing observations by cluster
+clust_n_missing <- focus_data %>% 
+  group_by(clust) %>% 
+  summarise(n_missing = sum(is.na(z))) %>% 
+  ungroup()
+
+clust_n_missing %>% arrange(n_missing)
+clust_n_missing %>% arrange(desc(n_missing))
+
+gg_miss_upset(focus_data)
+
+focus_data %>% filter(clust == 779)
+focus_data %>% filter(clust == 23)
+
+
+focus_data <- pool_data$`Data/pools/pool2000Lag0.csv`
+
+focus_data %>% filter((Count + CountLinear + CountSpline) > 0) %>% 
+  summary()
+
+focus_data <- pool_data$`Data/pools/pool3000Lag0.csv`
+
+focus_data %>% filter((Count + CountLinear + CountSpline) > 0) %>% 
+  summary()
+```
+
+Missing data occurs when count data is zero.
+
+
+
+```{r}
+pool_files <- list.files("Data/pools", full.names = T)
+
+pool_data <- list()
+
+for(file in pool_files) {
+  pool_data[[file]] <- read.csv(file) %>% 
+    filter((Count + CountLinear + CountSpline) > 0) %>% 
+    arrange(clust, Year) %>% 
+    group_by(clust, Year) %>% 
+    arrange(Month, .by_group = T) %>% 
+    ungroup()
+}
+```
+
+
+## Explore data
+
+```{r, fig.height=16, fig.width=16}
+bird_data_1500 <- bird_data$`Data/birds/bird1500Lag0.csv`
+bird_data_2000 <- bird_data$`Data/birds/bird2000Lag0.csv`
+bird_data_3000 <- bird_data$`Data/birds/bird3000Lag0.csv`
+
+pool_data_1500 <- pool_data$`Data/pools/pool1500Lag0.csv`
+pool_data_2000 <- pool_data$`Data/pools/pool2000Lag0.csv`
+pool_data_3000 <- pool_data$`Data/pools/pool3000Lag0.csv`
+
+sentinel_data_1500 <- sentinel_data$`Data/sentinels/sentinel1500Lag0.csv`
+sentinel_data_2000 <- sentinel_data$`Data/sentinels/sentinel2000Lag0.csv`
+sentinel_data_3000 <- sentinel_data$`Data/sentinels/sentinel3000Lag0.csv`
+
+densityPlotFunc <- function(data){
+  
+  return(lapply(names(data), function(var_x){
+    p <- 
+      ggplot(data) +
+      aes_string(var_x)
+  
+    if(is.numeric(data[[var_x]])) {
+      p <- p + geom_density()
+  
+    } else {
+      p <- p + geom_bar()
+    } 
+  }))
+  
+  
+}
+
+
+bird_data_1500_plots <- densityPlotFunc(bird_data_1500)
+bird_data_2000_plots <- densityPlotFunc(bird_data_2000)
+bird_data_3000_plots <- densityPlotFunc(bird_data_3000)
+
+pool_data_1500_plots <- densityPlotFunc(pool_data_1500)
+pool_data_2000_plots <- densityPlotFunc(pool_data_2000)
+pool_data_3000_plots <- densityPlotFunc(pool_data_3000)
+
+sentinel_data_1500_plots <- densityPlotFunc(sentinel_data_1500)
+sentinel_data_2000_plots <- densityPlotFunc(sentinel_data_2000)
+sentinel_data_3000_plots <- densityPlotFunc(sentinel_data_3000)
+ 
+# plot_grid(plotlist = bird_data_1500_plots)
+# plot_grid(plotlist = bird_data_2000_plots)
+# plot_grid(plotlist = bird_data_3000_plots)
+
+# plot_grid(plotlist = pool_data_1500_plots)
+# plot_grid(plotlist = pool_data_2000_plots)
+# plot_grid(plotlist = pool_data_3000_plots)
+
+# plot_grid(plotlist = sentinel_data_1500_plots)
+# plot_grid(plotlist = sentinel_data_2000_plots)
+# plot_grid(plotlist = sentinel_data_3000_plots)
+```
+
+The plots between each buffer within each grouping do not change, so we can just look at just the 1500m buffer plots.
+
+```{r, fig.width=16, fig.height=16}
+plot_grid(plotlist = bird_data_1500_plots)
+plot_grid(plotlist = pool_data_1500_plots)
+plot_grid(plotlist = sentinel_data_1500_plots)
+```
+
+

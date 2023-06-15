@@ -1,0 +1,51 @@
+## Set working directory and (install and) load any packages
+
+```{r setup}
+knitr::opts_knit$set(root.dir = "~/network-storage/WNV/sjv-wnv/")
+
+library(ggplot2)
+library(naniar)
+library(cowplot)
+library(AER)
+library(plm)
+library(dplyr)
+```
+
+
+
+## Data
+
+For the sake of simplicity, we will use only the data buffered at 1500 meters.
+
+```{r}
+bird_data <- read.csv("Data/birds/bird1500Lag0.csv") %>% 
+  arrange(clust, Year) %>% 
+    group_by(clust, Year) %>% 
+    arrange(Month, .by_group = T) %>% 
+    ungroup()
+pool_data <- read.csv("Data/pools/pool1500Lag0.csv") %>% 
+    filter((Count + CountLinear + CountSpline) > 0) %>% 
+    arrange(clust, Year) %>% 
+    group_by(clust, Year) %>% 
+    arrange(Month, .by_group = T) %>% 
+    ungroup()
+sentinel_data <- read.csv("Data/sentinels/sentinel1500Lag0.csv") %>% 
+  arrange(clust, Year) %>% 
+    group_by(clust, Year) %>% 
+    arrange(Month, .by_group = T) %>% 
+    ungroup()
+```
+
+## Bird data
+
+```{r}
+ggplot(bird_data) +
+  geom_histogram(aes(Count))
+```
+
+```{r}
+bird_data_pd <- pdata.frame(bird_data, index = c("state", "year"))
+```
+
+
+
