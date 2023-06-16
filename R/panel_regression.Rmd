@@ -6,9 +6,12 @@ knitr::opts_knit$set(root.dir = "~/network-storage/WNV/sjv-wnv/")
 library(ggplot2)
 library(naniar)
 library(cowplot)
-library(AER)
 library(plm)
 library(dplyr)
+library(lmtest)
+library(pglm)
+library(tidyr)
+library(ggforce)
 ```
 
 
@@ -20,20 +23,26 @@ For the sake of simplicity, we will use only the data buffered at 1500 meters.
 ```{r}
 bird_data <- read.csv("Data/birds/bird1500Lag0.csv") %>% 
   arrange(clust, Year) %>% 
-    group_by(clust, Year) %>% 
-    arrange(Month, .by_group = T) %>% 
-    ungroup()
+  group_by(clust, Year) %>% 
+  arrange(Month, .by_group = T) %>% 
+  ungroup() %>% 
+  mutate(m = (Year * 12 - 24072) + Month)
+  
 pool_data <- read.csv("Data/pools/pool1500Lag0.csv") %>% 
-    filter((Count + CountLinear + CountSpline) > 0) %>% 
-    arrange(clust, Year) %>% 
-    group_by(clust, Year) %>% 
-    arrange(Month, .by_group = T) %>% 
-    ungroup()
+  filter((Count + CountLinear + CountSpline) > 0) %>% 
+  arrange(clust, Year) %>% 
+  group_by(clust, Year) %>% 
+  arrange(Month, .by_group = T) %>% 
+  ungroup() %>% 
+  mutate(m = (Year * 12 - 24072) + Month)
+
 sentinel_data <- read.csv("Data/sentinels/sentinel1500Lag0.csv") %>% 
   arrange(clust, Year) %>% 
-    group_by(clust, Year) %>% 
-    arrange(Month, .by_group = T) %>% 
-    ungroup()
+  group_by(clust, Year) %>% 
+  arrange(Month, .by_group = T) %>% 
+  ungroup() %>% 
+  mutate(m = (Year * 12 - 24072) + Month)
+
 ```
 
 ## Bird data
@@ -43,9 +52,184 @@ ggplot(bird_data) +
   geom_histogram(aes(Count))
 ```
 
+### Simple Regression Model
+
 ```{r}
-bird_data_pd <- pdata.frame(bird_data, index = c("state", "year"))
+bird_data_pd <- pdata.frame(bird_data, index = c("clust", "m"))
+
+# estimate simple regression model
+bird_data_lm <- lm(Count ~ jrcStandingWater, data = bird_data_pd)
+
+coeftest(bird_data_lm, vcov. = vcovHC, type = "HC1")
+
+ggplot() + geom_density(aes(bird_data_lm$residuals))
+```
+
+Based on the simple regression model, as standing water increases, the count of infected birds increase per cluster. However, the residuals are not normally distributed, which makes sense since our target variable is discrete.
+
+Now we try using a panel linear model using the `plm()` function.
+
+### Regression with Fixed Effects
+
+```{r}
+# estimate the fixed effects regression with plm()
+
+bird_fe_plm <- plm(
+  Count ~ jrcStandingWater,
+  data = bird_data_pd,
+  index = c("clust", "m"),
+  model = "within"
+)
+
+coeftest(bird_fe_plm, vcov. = vcovHC, type = "HC1")
+
+ggplot() +
+  geom_density(aes(bird_fe_plm$residuals))
+```
+
+The coefficient for `jrcStandingWater` is not statistically significant, so we move on to another method.
+
+### Regression with Time-Fixed Effects
+
+
+```{r}
+bird_tefe_plm <- plm(
+  Count ~ jrcStandingWater,
+  data = bird_data_pd,
+  index = c("clust", "m"),
+  model = "within",
+  effect = "twoways"
+)
+
+coeftest(bird_tefe_plm, vcov. = vcovHC, type = "HC1")
+
+summary(bird_tefe_plm)
+
+ggplot() +
+  geom_density(aes(bird_tefe_plm$residuals))
+```
+
+The coefficient is still not statistically significant, though it is an improvement from before. 
+
+Now, let's add some covariates.
+
+### Several Various Models
+
+```{r}
+bird_mod1 <- pglm(
+  Count ~ jrcStandingWater, 
+  data = bird_data_pd, 
+  family = poisson(link = 'sqrt')
+)
+
+summary(bird_mod1)
+
+bird_mod2 <- pglm(
+  Count ~ jrcStandingWater + Year + Month,
+  data = bird_data_pd,
+  family = poisson(link = 'sqrt')
+)
+
+summary(bird_mod2)
+
+
+bird_mod3 <- plm(
+  Count ~ jrcStandingWater + EVI + Precip.Mean.mm...day + pdsi + Specific.Humidity,
+  data = bird_data_pd
+)
+
+summary(bird_mod3)
+
+ggplot() + geom_density(aes(bird_mod3$residuals))
+
+bird_mod4 <- plm(
+  Count ~ jrcStandingWater + EVI + Precip.Mean.mm...day + pdsi + Specific.Humidity,
+  data = bird_data_pd,
+  effect = "twoways",
+  model = "within"
+)
+
+summary(bird_mod4)
+
+ggplot() + geom_density(aes(bird_mod4$residuals))
+
+bird_mod4 <- plm(
+  Count ~ jrcStandingWater + Precip.Mean.mm...day + pdsi + Specific.Humidity + z,
+  data = bird_data_pd,
+  index = c("clust", "m"),
+  model = "within"
+)
+
+
+coeftest(bird_mod4)
+summary(bird_mod4)
+
+ggplot() + geom_density(aes(bird_mod4$residuals))
+
+bird_mod5 <- plm(
+  log(Count) ~ jrcStandingWater + Precip.Mean.mm...day + pdsi + Specific.Humidity + z,
+  data = bird_data_pd,
+  index = c("clust", "m"),
+  effect = "twoways",
+  model = "within"
+)
+
+summary(bird_mod5)
+
+coeftest(bird_mod5, vcov. = vcovHC, type = "HC1")
+
+ggplot() + geom_density(aes(bird_mod5$residuals))
+
+bird_mod6 <- glm(
+  Count ~ jrcStandingWater + Year - 1 + + NDVI + Precip.Mean.mm...day + pdsi + Specific.Humidity +
+    Humidity.Max + Humidity.Min + z + spi1y, 
+  data = bird_data_pd,
+  family = poisson
+)
+
+summary(bird_mod6)
+
+coeftest(bird_mod6, vcov. = vcovHC, type = "HC1")
+
+ggplot() + geom_density(aes(bird_mod6$residuals))
 ```
 
 
+```{r}
+bird_data_factored <- bird_data %>% 
+  mutate(Count = as.factor(Count)) %>% 
+  group_by(clust, m, Count) %>% 
+  pivot_longer(c(Month, Year, Humidity.Max:z)) %>% 
+  ungroup() %>% 
+  select(clust, Count, m, name, value)
+
+# put in number of plots here
+noPlots <- 1
+# save all variables in a seperate vector to select in for-loop
+allVars <- unique(bird_data_factored$name)
+noVars <- length(allVars)
+
+# indices for plotting variables
+plotSequence <- c(seq(0, noVars-1, by = noPlots), noVars)
+
+# pdf("plotpath.pdf") # uncomment to save the resulting plots in a pdf file
+# loop over the variables to plot
+for(ii in 2:length(plotSequence)){
+  # select start and end of variables to plot
+  start <- plotSequence[ii-1] + 1
+  end <- plotSequence[ii]
+
+  # subset the variables and save new temporary data.frame
+  tmp <- subset(bird_data_factored, name %in% allVars[start:end])
+  cat(unique(tmp$name), "\n")
+
+  # generate plot
+  p <- ggplot(tmp)+
+    geom_boxplot(aes(value)) +
+    facet_wrap( ~ Count , ncol = 5, scales = "fixed") +
+    xlab(tmp$name)
+  print(p)
+}
+
+```
 
