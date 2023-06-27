@@ -1,18 +1,17 @@
-## Set working directory and (install and) load any packages
+---
+title: "explore"
+output: html_document
+date: "2023-06-20"
+---
 
-```{r setup}
-setwd("/home/jessiejzhou/sjv-wnv")
-knitr::opts_chunk$set(echo = TRUE)
-library(dplyr)
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "~/network-storage/WNV/sjv-wnv/")
 library(ggplot2)
-library(naniar)
-library(cowplot)
+library(dplyr)
+library(corrplot)
 ```
 
-## View data
-
-### View bird data
-
+## Birds
 ```{r}
 bird_files <- list.files("Data/birds", full.names = T)
 
@@ -27,12 +26,11 @@ for(file in bird_files) {
 }
 
 for(df in bird_data){
-  print(summary(df))
+   print(sapply(df, var))
 }
 ```
 
-
-### View pool data
+## Pooled 
 
 ```{r}
 pool_files <- list.files("Data/pools", full.names = T)
@@ -46,16 +44,9 @@ for(file in pool_files) {
     arrange(Month, .by_group = T) %>% 
     ungroup()
 }
-
-for(df in pool_data){
-  print(summary(df))
-}
 ```
 
-Missing data here for the pooled mosquito data.
-
-
-### View sentinel data
+## Sentinel
 
 ```{r}
 sentinel_files <- list.files("Data/sentinels", full.names = T)
@@ -69,15 +60,10 @@ for(file in sentinel_files) {
     arrange(Month, .by_group = T) %>% 
     ungroup()
 }
-
-for(df in sentinel_data){
-  print(summary(df))
-}
 ```
 
 
-## Explore the missing data
-
+## Missing data 
 ```{r, fig.width=8, fig.height=8}
 focus_data <- pool_data$`Data/pools/pool1500Lag0.csv`
 
@@ -114,29 +100,8 @@ focus_data %>% filter((Count + CountLinear + CountSpline) > 0) %>%
   summary()
 ```
 
-Missing data occurs when count data is zero.
-
-
 
 ```{r}
-pool_files <- list.files("Data/pools", full.names = T)
-
-pool_data <- list()
-
-for(file in pool_files) {
-  pool_data[[file]] <- read.csv(file) %>% 
-    filter((Count + CountLinear + CountSpline) > 0) %>% 
-    arrange(clust, Year) %>% 
-    group_by(clust, Year) %>% 
-    arrange(Month, .by_group = T) %>% 
-    ungroup()
-}
-```
-
-
-## Explore data
-
-```{r, fig.height=16, fig.width=16}
 bird_data_1500 <- bird_data$`Data/birds/bird1500Lag0.csv`
 bird_data_2000 <- bird_data$`Data/birds/bird2000Lag0.csv`
 bird_data_3000 <- bird_data$`Data/birds/bird3000Lag0.csv`
@@ -149,12 +114,13 @@ sentinel_data_1500 <- sentinel_data$`Data/sentinels/sentinel1500Lag0.csv`
 sentinel_data_2000 <- sentinel_data$`Data/sentinels/sentinel2000Lag0.csv`
 sentinel_data_3000 <- sentinel_data$`Data/sentinels/sentinel3000Lag0.csv`
 
+
 densityPlotFunc <- function(data){
   
   return(lapply(names(data), function(var_x){
     p <- 
       ggplot(data) +
-      aes_string(var_x)
+      aes(var_x)
   
     if(is.numeric(data[[var_x]])) {
       p <- p + geom_density()
@@ -166,7 +132,6 @@ densityPlotFunc <- function(data){
   
   
 }
-
 
 bird_data_1500_plots <- densityPlotFunc(bird_data_1500)
 bird_data_2000_plots <- densityPlotFunc(bird_data_2000)
@@ -180,25 +145,27 @@ sentinel_data_1500_plots <- densityPlotFunc(sentinel_data_1500)
 sentinel_data_2000_plots <- densityPlotFunc(sentinel_data_2000)
 sentinel_data_3000_plots <- densityPlotFunc(sentinel_data_3000)
  
-# plot_grid(plotlist = bird_data_1500_plots)
-# plot_grid(plotlist = bird_data_2000_plots)
-# plot_grid(plotlist = bird_data_3000_plots)
-
-# plot_grid(plotlist = pool_data_1500_plots)
-# plot_grid(plotlist = pool_data_2000_plots)
-# plot_grid(plotlist = pool_data_3000_plots)
-
-# plot_grid(plotlist = sentinel_data_1500_plots)
-# plot_grid(plotlist = sentinel_data_2000_plots)
-# plot_grid(plotlist = sentinel_data_3000_plots)
 ```
 
-The plots between each buffer within each grouping do not change, so we can just look at just the 1500m buffer plots.
-
-```{r, fig.width=16, fig.height=16}
+```{r}
 plot_grid(plotlist = bird_data_1500_plots)
 plot_grid(plotlist = pool_data_1500_plots)
 plot_grid(plotlist = sentinel_data_1500_plots)
 ```
 
+```{r, fig.height=16, fig.width=16}
+
+corrPlotFn <- function(data) {
+  numeric_vars <- sapply(data, is.numeric)
+  numeric_data <- data[, numeric_vars]
+
+  corr_matrix <- cor(numeric_data)
+
+  corrplot(corr_matrix, type = 'lower', diag = FALSE, method = 'color')
+}
+
+corrPlotFn(bird_data_1500)
+corrPlotFn(pool_data_1500)
+corrPlotFn(sentinel_data_1500)
+```
 
