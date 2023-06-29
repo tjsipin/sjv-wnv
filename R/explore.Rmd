@@ -9,6 +9,7 @@ knitr::opts_knit$set(root.dir = "~/network-storage/WNV/sjv-wnv/")
 library(ggplot2)
 library(dplyr)
 library(corrplot)
+library(knitr)
 ```
 
 ## Birds
@@ -153,6 +154,8 @@ plot_grid(plotlist = pool_data_1500_plots)
 plot_grid(plotlist = sentinel_data_1500_plots)
 ```
 
+
+## Correlation 
 ```{r, fig.height=16, fig.width=16}
 
 corrPlotFn <- function(data) {
@@ -164,8 +167,11 @@ corrPlotFn <- function(data) {
   corrplot(corr_matrix, type = 'lower', diag = FALSE, method = 'color')
 }
 
+# look at lags of correlation matrices
 corrPlotFn(bird_data_1500)
 corrPlotFn(pool_data_1500)
 corrPlotFn(sentinel_data_1500)
+cor(bird_data_1500)
+kable(cor(bird_data_1500$Count, bird_data_1500[, -which(names(bird_data_1500) == "Count")]))
 ```
 

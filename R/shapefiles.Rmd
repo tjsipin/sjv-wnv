@@ -1,0 +1,31 @@
+---
+title: "shapefiles"
+output: html_document
+date: "2023-06-29"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/home/jessiejzhou/sjv-wnv/")
+library(sf)
+```
+
+## Shapefiles For 1500m
+```{r}
+# Loading
+bird_1500_shape <- st_read("Data/birds/shapefile/bird1500.shp")
+pool_1500_shape <- st_read("Data/pools/shapefile/pool1500.shp")
+sentinel_1500_shape <- st_read("Data/sentinels/shapefile/sentinel1500.shp")
+
+# Plotting
+
+plot(bird_1500_shape, main = "birds")
+plot(pool_1500_shape, main = "pools")
+plot(sentinel_1500_shape, main = "sentinels")
+```
+
+## Pool 
+
+```{r}
+
+```
+
