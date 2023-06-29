@@ -17,7 +17,6 @@ pool_1500_shape <- st_read("Data/pools/shapefile/pool1500.shp")
 sentinel_1500_shape <- st_read("Data/sentinels/shapefile/sentinel1500.shp")
 
 # Plotting
-
 plot(bird_1500_shape, main = "birds")
 plot(pool_1500_shape, main = "pools")
 plot(sentinel_1500_shape, main = "sentinels")
