@@ -11,7 +11,9 @@ library(rsample)
 library(spatialsample)
 library(dplyr)
 library(pROC)
+library(rgdal)
 library(sdm)
+library(sf)
 set.seed(123)
 ```
 
@@ -53,24 +55,24 @@ for (i in 1:5) {
 splits_df <- st_drop_geometry(splits_df)
 splits_df <- distinct(splits_df, clust, .keep_all = TRUE)
 
-bird_train <- merge(bird_train, splits_df, by ="clust")
+bird_train2 <- merge(bird_train, splits_df, by ="clust")
 ```
 
 ```{r}
-bird2 <- bird_train[c("fold", "Count", "Humidity.Max", "Humidity.Min", "Specific.Humidity", "Temp.Max.K", "Temp.Min.K", "VPD.kPa", "Precip.Mean.mm...day", "EVI", "NDVI", "jrcStandingWater")]
+bird2 <- bird_train2[c("fold", "Count", "Humidity.Max", "Humidity.Min", "Specific.Humidity", "Temp.Max.K", "Temp.Min.K", "VPD.kPa", "Precip.Mean.mm...day", "EVI", "NDVI", "jrcStandingWater")]
 bird2 <- bird2[sample(1:nrow(bird2)), ]
 bird2 <- na.omit(bird2)
 
 # df for results of each fold, 5-fold cv
-rf_performance  <-  data.frame(model  =  rep("RF", 5),
+glm_performance  <-  data.frame(model  =  rep("GLM", 5),
                                fold_id  =  1:5,
                                auc  =  rep(NA, 5),
                                Count  =  rep(NA, 5),    
                                background  =  rep(NA, 5))
 
-hypergrid_final  <-  data.frame(mtry  =  rep(NA,5),
-                                node_size    =  rep(NA, 5),
-                                sample_size  =  rep(NA, 5))
+# hypergrid_final  <-  data.frame(mtry  =  rep(NA,5),
+#                                 node_size    =  rep(NA, 5),
+#                                 sample_size  =  rep(NA, 5))
 
 ```
 
@@ -82,59 +84,52 @@ for (i in 1:5) {
   train <- bird2[bird2$fold != i,]; train <- train[-1]
   test <- bird2[bird2$fold == i,]; test <- test[-1]
   
-  hyper_grid <- expand.grid(mtry = seq(1,10,1),
-                            node_size = seq(1,4,1),
-                            sample_size = c(0.6,0.7,0.8))
+  # hyper_grid <- expand.grid(mtry = seq(1,10,1),
+  #                           node_size = seq(1,4,1),
+  #                           sample_size = c(0.6,0.7,0.8))
   
-  for (j in 1:nrow(hyper_grid)){
     
-    model <- ranger(formula = Count ~ .,
+    model <- glm(formula = Count ~ .,
                     data = train,
-                    num.trees = 2000,
-                    mtry = hyper_grid$mtry[j],
-                    min.node.size = hyper_grid$node_size[j],
-                    sample.fraction = hyper_grid$sample_size[j],`
-                    probability = T,
-                    replace = T,
-                    splitrule = "extratrees",
-                    seed = 123)
+                    family = poisson)
     
-    hyper_grid$OOB_RMSE[j] <- sqrt(model$prediction.error)
-  }
-  
-  hyper_grid2 <- hyper_grid %>%
-    dplyr::arrange(OOB_RMSE)
-  
-  train_model  <-  ranger(
-        formula  =  Count  ~  .,    
-        data  =  train, 
-        num.trees  =  2000,  
-        mtry  =  hyper_grid2$mtry[1], 
-        min.node.size  =  hyper_grid2$node_size[1], 
-        sample.fraction  =  hyper_grid2$sample_size[1],
-        probability  =  TRUE, 
-        replace = TRUE,
-        splitrule = "extratrees",
-        seed  =  123)
+    train_model <- glm(formula = Count ~ .,
+                    data = train,
+                    family = poisson)
   
   pred0 <- predict(train_model, data = test); pred <- pred0$predictions[,1]
   auc <- pROC::roc(response = test[,"Count"], predictor = pred, levels = c(0,1), auc = T)
-  rf_performance[i, "auc"] <- auc$auc
-  rf_performance[i, "Count"] <- nrow(subset(test, Count == 1))
-  rf_performance[i, "background"] <- nrow(subset(test, Count == 0))
+  glm_performance[i, "auc"] <- auc$auc
+  glm_performance[i, "Count"] <- nrow(subset(test, Count != 0))
+  glm_performance[i, "background"] <- nrow(subset(test, Count == 0))
   
-  hypergrid_final[i, "mtry"] <- hyper_grid2$mtry[1]
-  hypergrid_final[i, "node_size"] <- hyper_grid2$node_size[1]
-  hypergrid_final[i, "sample_size"] <- hyper_grid2$sample_size[1]
+  # hypergrid_final[i, "mtry"] <- hyper_grid2$mtry[1]
+  # hypergrid_final[i, "node_size"] <- hyper_grid2$node_size[1]
+  # hypergrid_final[i, "sample_size"] <- hyper_grid2$sample_size[1]
   
 }
 
-saveRDS(rf_performance, "/home/jessiejzhou/sjv-wnv/R/rf_performance.rds")
-saveRDS(hypergrid_final, "/home/jessiejzhou/sjv-wnv/R/hypergrid_final.rds")
+saveRDS(glm_performance, "/home/jessiejzhou/sjv-wnv/R/glm_performance.rds")
+# saveRDS(hypergrid_final, "/home/jessiejzhou/sjv-wnv/R/hypergrid_final.rds")
 ```
 
 
 ## trying the sdm package
+```{r}
+bird_3000_shape <- shapefile("Data/2_clusterExport/bird3000/bird3000.shp")
+head(bird_3000_shape)
+
+bird_sdm_train <- merge(bird_train, bird_sf, by = "clust")
+bird_sdm_train <- bird_sdm_train[c("clust", "Count", "Humidity.Max", "Humidity.Min", "Specific.Humidity", "Temp.Max.K", "Temp.Min.K", "VPD.kPa", "Precip.Mean.mm...day", "EVI", "NDVI", "jrcStandingWater", "lat", "long")]
+
+bird_sdm_test <- merge(bird_test, bird_sf, by = "clust")
+bird_sdm_test <- bird_sdm_test[c("clust", "Count", "Humidity.Max", "Humidity.Min", "Specific.Humidity", "Temp.Max.K", "Temp.Min.K", "VPD.kPa", "Precip.Mean.mm...day", "EVI", "NDVI", "jrcStandingWater", "lat", "long")]
+
+d <- ?sdmData(formula= Count ~., train = bird_sdm_train, test = bird_sdm_test)
+
+m1 <- sdm(Count ~.,data=d,methods=c('glm','gam'))
+m1
+```
 
 
 
