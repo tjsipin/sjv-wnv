@@ -14,6 +14,8 @@ library(pROC)
 library(rgdal)
 library(sdm)
 library(sf)
+library(ggplot2)
+library(pscl)
 set.seed(123)
 ```
 
@@ -59,7 +61,7 @@ bird_train2 <- merge(bird_train, splits_df, by ="clust")
 ```
 
 ```{r}
-bird2 <- bird_train2[c("fold", "Count", "Humidity.Max", "Humidity.Min", "Specific.Humidity", "Temp.Max.K", "Temp.Min.K", "VPD.kPa", "Precip.Mean.mm...day", "EVI", "NDVI", "jrcStandingWater")]
+bird2 <- bird_train2[c("Count", "fold", "Humidity.Max", "Humidity.Min", "Specific.Humidity", "Temp.Max.K", "Temp.Min.K", "VPD.kPa", "Precip.Mean.mm...day", "EVI", "NDVI", "jrcStandingWater")]
 bird2 <- bird2[sample(1:nrow(bird2)), ]
 bird2 <- na.omit(bird2)
 
@@ -69,11 +71,6 @@ glm_performance  <-  data.frame(model  =  rep("GLM", 5),
                                auc  =  rep(NA, 5),
                                Count  =  rep(NA, 5),    
                                background  =  rep(NA, 5))
-
-# hypergrid_final  <-  data.frame(mtry  =  rep(NA,5),
-#                                 node_size    =  rep(NA, 5),
-#                                 sample_size  =  rep(NA, 5))
-
 ```
 
 
@@ -81,31 +78,20 @@ glm_performance  <-  data.frame(model  =  rep("GLM", 5),
 ```{r}
 for (i in 1:5) {
   
-  train <- bird2[bird2$fold != i,]; train <- train[-1]
-  test <- bird2[bird2$fold == i,]; test <- test[-1]
-  
-  # hyper_grid <- expand.grid(mtry = seq(1,10,1),
-  #                           node_size = seq(1,4,1),
-  #                           sample_size = c(0.6,0.7,0.8))
+  train <- bird2[bird2$fold != i,]; train <- train[-2]
+  test <- bird2[bird2$fold == i,]; test <- test[-2]
   
     
     model <- glm(formula = Count ~ .,
                     data = train,
-                    family = poisson)
-    
-    train_model <- glm(formula = Count ~ .,
-                    data = train,
-                    family = poisson)
+                    family = poisson(link = 'log'))
   
-  pred0 <- predict(train_model, data = test); pred <- pred0$predictions[,1]
-  auc <- pROC::roc(response = test[,"Count"], predictor = pred, levels = c(0,1), auc = T)
+   pred0 <- predict(model, newdata = test, type = "response")
+   auc <- pROC::roc(response = test$Count, predictor = pred0, levels = c(0, 1), auc = TRUE)
+  
   glm_performance[i, "auc"] <- auc$auc
-  glm_performance[i, "Count"] <- nrow(subset(test, Count != 0))
-  glm_performance[i, "background"] <- nrow(subset(test, Count == 0))
-  
-  # hypergrid_final[i, "mtry"] <- hyper_grid2$mtry[1]
-  # hypergrid_final[i, "node_size"] <- hyper_grid2$node_size[1]
-  # hypergrid_final[i, "sample_size"] <- hyper_grid2$sample_size[1]
+  glm_performance[i, "Count"] <- sum(test$Count)
+  glm_performance[i, "background"] <- sum(test$Count == 0)
   
 }
 
@@ -113,25 +99,82 @@ saveRDS(glm_performance, "/home/jessiejzhou/sjv-wnv/R/glm_performance.rds")
 # saveRDS(hypergrid_final, "/home/jessiejzhou/sjv-wnv/R/hypergrid_final.rds")
 ```
 
-
-## trying the sdm package
+## On testing set
 ```{r}
-bird_3000_shape <- shapefile("Data/2_clusterExport/bird3000/bird3000.shp")
-head(bird_3000_shape)
+bird_test <- na.omit(bird_test)
 
-bird_sdm_train <- merge(bird_train, bird_sf, by = "clust")
-bird_sdm_train <- bird_sdm_train[c("clust", "Count", "Humidity.Max", "Humidity.Min", "Specific.Humidity", "Temp.Max.K", "Temp.Min.K", "VPD.kPa", "Precip.Mean.mm...day", "EVI", "NDVI", "jrcStandingWater", "lat", "long")]
+final_bird_model <- glm(formula = Count ~ . ,
+                        data = bird2[-2],
+                        family = poisson(link = "log"))
 
-bird_sdm_test <- merge(bird_test, bird_sf, by = "clust")
-bird_sdm_test <- bird_sdm_test[c("clust", "Count", "Humidity.Max", "Humidity.Min", "Specific.Humidity", "Temp.Max.K", "Temp.Min.K", "VPD.kPa", "Precip.Mean.mm...day", "EVI", "NDVI", "jrcStandingWater", "lat", "long")]
+pred1 <- predict(final_bird_model, newdata = bird_test, type = "response")
+data.frame(pred1)
+summary(pred1)
+```
 
-d <- ?sdmData(formula= Count ~., train = bird_sdm_train, test = bird_sdm_test)
+## Trying to take the average of each cluster?
+```{r}
 
-m1 <- sdm(Count ~.,data=d,methods=c('glm','gam'))
-m1
 ```
 
 
+
+## Zero-Inflated Models
+
+Plotting Counts
+```{r}
+bird_count <- data.frame(table(bird$Count))
+bird_count_no0 <- bird_count[-1,]
+ggplot(bird_count, aes(x = Var1, y = Freq)) + geom_bar(stat = "identity")
+ggplot(bird_count_no0, aes(x = Var1, y = Freq)) + geom_bar(stat = "identity")
+
+summary(bird$Count)
+```
+
+Trying Zero-Inflated Poisson regression
+```{r}
+zip_performance  <-  data.frame(model  =  rep("ZIP", 5),
+                               fold_id  =  1:5,
+                               auc  =  rep(NA, 5),
+                               Count  =  rep(NA, 5),    
+                               background  =  rep(NA, 5))
+```
+
+### Zero Inflated Model with Poisson Dist
+```{r}
+for (i in 1:5) {
+  
+  train <- bird2[bird2$fold != i,]; train <- train[-2]
+  test <- bird2[bird2$fold == i,]; test <- test[-2]
+  
+    # can i specify which variable influences the zeroes?
+    model <- zeroinfl(formula = Count ~ ., 
+                      
+                    data = train,
+                    dist = "poisson")
+  
+   pred0 <- predict(model, newdata = test, type = "response")
+   auc <- pROC::roc(response = test$Count, predictor = pred0, levels = c(0, 1), auc = TRUE)
+  
+  zip_performance[i, "auc"] <- auc$auc
+  zip_performance[i, "Count"] <- sum(test$Count)
+  zip_performance[i, "background"] <- sum(test$Count == 0)
+  
+}
+
+```
+
+### on Testing data
+
+```{r}
+final_bird_zip_model <- zeroinfl(formula = Count ~ .,
+                          data = bird2[-2],
+                          dist = "poisson")
+
+pred2 <- predict(final_bird_zip_model, newdata = bird_test, type = "response")
+data.frame(pred2)
+
+```
 
 
 
