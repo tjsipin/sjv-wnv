@@ -16,15 +16,18 @@ library(sdm)
 library(sf)
 library(ggplot2)
 library(pscl)
+library(corrplot)
 set.seed(123)
 ```
 
-## Loading Data, at 3000 level
+# Loading Data, at 3000 level
 ```{r}
 bird <- readRDS("Data/5_joinGEELag/bird3000Lag0.rds")
 pool <- readRDS("Data/5_joinGEELag/pool3000Lag0.rds")
 sentinel <- readRDS("Data/5_joinGEELag/sentinel3000Lag0.rds")
 ```
+
+# Bird Data 
 
 ## Train/Test Split
 ```{r}
@@ -128,7 +131,17 @@ bird_count_no0 <- bird_count[-1,]
 ggplot(bird_count, aes(x = Var1, y = Freq)) + geom_bar(stat = "identity")
 ggplot(bird_count_no0, aes(x = Var1, y = Freq)) + geom_bar(stat = "identity")
 
-summary(bird$Count)
+# Pool data
+pool_count <- data.frame(table(pool$Count))
+pool_count_no0 <- pool_count[-1,]
+ggplot(pool_count, aes(x = Var1, y = Freq)) + geom_bar(stat = "identity")
+ggplot(pool_count_no0, aes(x = Var1, y = Freq)) + geom_bar(stat = "identity")
+
+# Sentinel data
+sentinel_count <- data.frame(table(sentinel$Count))
+sentinel_count_no0 <- sentinel_count[-1,]
+ggplot(sentinel_count, aes(x = Var1, y = Freq)) + geom_bar(stat = "identity")
+ggplot(sentinel_count_no0, aes(x = Var1, y = Freq)) + geom_bar(stat = "identity")
 ```
 
 Trying Zero-Inflated Poisson regression
@@ -149,7 +162,6 @@ for (i in 1:5) {
   
     # can i specify which variable influences the zeroes?
     model <- zeroinfl(formula = Count ~ ., 
-                      
                     data = train,
                     dist = "poisson")
   
@@ -176,13 +188,106 @@ data.frame(pred2)
 
 ```
 
+# Pool Data
+```{r}
+pool_split <- initial_split(pool, prop = 0.8, strata = clust)
+pool_train <- training(pool_split)
+pool_test <- testing(pool_split)
+```
 
+## cv grid
+```{r}
+# Getting lat/long
+pool_sf <- read_sf("Data/2_clusterExport/pool3000/pool3000.shp") %>% 
+  st_transform(4326) %>%
+  mutate(centroids = st_centroid(geometry),
+         long = st_coordinates(centroids)[,1],
+         lat = st_coordinates(centroids)[,2]) %>%
+  select(-centroids)
 
+clusters_pool <- spatial_block_cv(pool_sf, method = "random", n = 30, relevant_only = T, v = 5)
 
+splits_df_pool <- data.frame()
+for (i in 1:5) {
+  new_df <- assessment(clusters_pool$splits[[i]])
+  new_df$fold <- i
+  splits_df_pool <- rbind(splits_df_pool, new_df)  # Bind all points and fold IDs together
+}
 
+splits_df_pool <- st_drop_geometry(splits_df_pool)
+splits_df_pool <- distinct(splits_df_pool, clust, .keep_all = TRUE)
 
+pool_train2 <- merge(pool_train, splits_df_pool, by ="clust")
+```
 
+```{r}
+pool2 <- pool_train2[c("Count", "fold", "Humidity.Max", "Humidity.Min", "Specific.Humidity", "Temp.Max.K", "Temp.Min.K", "VPD.kPa", "Precip.Mean.mm...day", "EVI", "NDVI", "jrcStandingWater")]
+pool2 <- pool2[sample(1:nrow(pool2)), ]
+pool2 <- na.omit(pool2)
 
+# df for results of each fold, 5-fold cv
+zip_performance_pool  <-  data.frame(model  =  rep("GLM", 5),
+                               fold_id  =  1:5,
+                               auc  =  rep(NA, 5),
+                               Count  =  rep(NA, 5),    
+                               background  =  rep(NA, 5))
+```
 
+## running zip model
+
+```{r}
+for (i in 1:5) {
+  
+  train <- pool2[pool2$fold != i,]; train <- train[-2]
+  test <- pool2[pool2$fold == i,]; test <- test[-2]
+  
+    # can i specify which variable influences the zeroes?
+    model <- zeroinfl(formula = Count ~ ., 
+                    data = train,
+                    dist = "poisson")
+  
+   pred0 <- predict(model, newdata = test, type = "response")
+   auc <- pROC::roc(response = test$Count, predictor = pred0, levels = c(0, 1), auc = TRUE)
+  
+  zip_performance_pool[i, "auc"] <- auc$auc
+  zip_performance_pool[i, "Count"] <- sum(test$Count)
+  zip_performance_pool[i, "background"] <- sum(test$Count == 0)
+  
+}
+
+```
+```{r}
+pool_test %>%
+  na.omit()
+
+final_pool_zip_model <- zeroinfl(formula = Count ~ .,
+                          data = pool2[-2],
+                          dist = "poisson")
+
+pool_zip_pred <- predict(final_pool_zip_model, newdata = pool_test, type = "response")
+data.frame(pool_zip_pred)
+summary(pool_zip_pred)
+```
+
+# Surveilance data
+
+## eda
+```{r}
+tarsalis1500 <- read.csv("Data/weekly/tarsalisFemale1500LagWeeks0.csv")
+```
+
+```{r, fig.height=16, fig.width=16}
+corrPlotFn <- function(data) {
+  numeric_vars <- sapply(data, is.numeric)
+  numeric_data <- data[, numeric_vars]
+  numeric_data <- na.omit(numeric_data)
+
+  corr_matrix <- cor(numeric_data)
+
+  corrplot(corr_matrix, type = 'lower', diag = FALSE, method = 'color')
+}
+
+corrPlotFn(tarsalis1500)
+```
 
 
