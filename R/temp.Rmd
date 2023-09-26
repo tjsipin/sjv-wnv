@@ -1,0 +1,304 @@
+---
+title: "sdm_weekly"
+output: html_document
+date: "2023-07-16"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/home/jessiejzhou/network-storage/WNV/sjv-wnv")
+library(ranger)
+library(rsample)
+library(spatialsample)
+library(dplyr)
+library(pROC)
+library(rgdal)
+library(sdm)
+library(sf)
+library(ggplot2)
+library(pscl)
+library(corrplot)
+library(xts)
+library(ISOweek)
+library(sf)
+library(glmnet)
+library(raster)
+library(PerformanceAnalytics)
+set.seed(123)
+```
+
+
+# Spatial CV
+```{r}
+# plotting shapefile
+sf <- st_read("Data/weekly/clusterPolys_2_23_update.shp")
+
+# getting lat/long
+# coords <- sf %>%
+#   st_transform(4326) %>%
+#   mutate(centroids = st_centroid(geometry),
+#          long = st_coordinates(centroids)[,1],
+#          lat = st_coordinates(centroids)[,2]) %>%
+#   dplyr::select(-centroids)
+
+clusters <- spatial_block_cv(sf, method = "random", n = 30, relevant_only = T, v = 5)
+
+splits_df <- data.frame()
+for (i in 1:5) {
+  new_df <- assessment(clusters$splits[[i]])
+  new_df$fold <- i
+  splits_df <- rbind(splits_df, new_df)  # Bind all points and fold IDs together
+}
+
+splits_df <- st_drop_geometry(splits_df)
+splits_df <- distinct(splits_df, clust, .keep_all = TRUE)
+```
+
+```{r}
+MIRPIR <- read.csv("Data/weekly/wnvMIRPIR1500LagWeeks0.csv")
+
+MIRPIR_2 <- MIRPIR %>%
+  merge(splits_df, by = "clust") %>%
+  mutate(MIRAll = ifelse(MIRAll > 0, 1, 0))
+
+mirpir <- MIRPIR_2[c(c("MIRAll", "fold", "Humidity.Max", "Humidity.Min", "Specific.Humidity", "Temp.Max.K", "Temp.Min.K", "VPD.kPa", "Precip.Mean.mm...day", "EVI", "NDVI", "jrcStandingWater"))]
+```
+
+# Correlation Analysis
+```{r, fig.height=16, fig.width=16}
+corr_mirpir <- MIRPIR[, 5:ncol(MIRPIR)] %>%
+  na.omit() %>%
+  subset(select = -c(Date))
+
+corr <- abs(cor(corr_mirpir))
+
+corrplot(cor(corr_mirpir), type = 'lower', diag = FALSE)
+
+chart.Correlation(corr_mirpir, 
+                  histogram = TRUE, method = "pearson")
+```
+
+# Tuning grid
+```{r}
+rf_performance <- data.frame(model  =  rep("RF", 5),
+                               fold_id  =  1:5,
+                               auc  =  rep(NA, 5),
+                               presence  =  rep(NA, 5)
+                               background  =  rep(NA, 5)) 
+
+hypergrid_final <- data.frame(mtry  =  rep(NA,5),
+                                node_size    =  rep(NA, 5),
+                                sample_size  =  rep(NA, 5))  
+```
+
+
+
+```{r}
+for(i  in  1:5){ 
+    
+    train  <-  mirpir[mirpir$fold !=  i, ];  train  <-  train[-2]
+    test  <-  mirpir[mirpir$fold ==  i, ];  test  <-  test[-2]
+  
+    train_complete  <-  train[complete.cases(train), ]
+    test_complete  <-  test[complete.cases(test), ]
+
+    hyper_grid  <-  expand.grid(
+        mtry =  seq(1, 10, by  =  1), 
+        node_size =  seq(1,4, by  =  1),    
+        sample_size  =  c(.6, .70, .80),   
+        OOB_RMSE =  0
+    )
+
+    for(j  in  1:nrow(hyper_grid)){
+        
+        model  <-  ranger(
+            formula  =  MIRAll  ~  .,    
+            data  =  train_complete,    
+            num.trees  =  2000,  
+            mtry  =  hyper_grid$mtry[j],
+            min.node.size  =  hyper_grid$node_size[j],  
+            sample.fraction  =  hyper_grid$sample_size[j], 
+            probability  =  TRUE, 
+            replace = TRUE,
+            splitrule = "extratrees",
+            seed  =  123
+            )
+        
+        hyper_grid$OOB_RMSE[j]  <-  sqrt(model$prediction.error)
+    }
+    
+    hyper_grid2  <-  hyper_grid  %>%  
+        dplyr::arrange(OOB_RMSE)
+    
+    #train  model
+    train_model  <-  ranger(
+        formula  =  MIRAll  ~  .,    
+        data  =  train_complete,   
+        num.trees  =  2000,  
+        mtry  =  hyper_grid2$mtry[1], 
+        min.node.size  =  hyper_grid2$node_size[1], 
+        sample.fraction  =  hyper_grid2$sample_size[1],
+        probability  =  TRUE, 
+        replace = TRUE,
+        splitrule = "hellinger",
+        seed  =  123)
+    
+    #save  model  performance  results
+    pred0  <-  predict(train_model, data=test_complete);  pred  <-  pred0$predictions[,1]
+    auc  <-  pROC::roc(response=test_complete[,"presence"], predictor=pred, levels=c(0, 1), auc  =  TRUE)
+    rf_performance[i, "auc"]  <-  auc$auc
+    rf_performance[i, "presence"] <- nrow(subset(test, presence  ==  1))
+    rf_performance[i, "background"] <-nrow(subset(test, presence  ==  0))
+    
+    hypergrid_final[i, "mtry"]  <-  hyper_grid2$mtry[1]
+    hypergrid_final[i, "node_size"]  <-  hyper_grid2$node_size[1]
+    hypergrid_final[i, "sample_size"]  <-  hyper_grid2$sample_size[1]
+
+}
+
+```
+
+
+# plm
+---
+title: "plm"
+output: html_document
+date: "2023-07-27"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/home/jessiejzhou/network-storage/WNV/sjv-wnv")
+library(sf)
+library(plm)
+library(margins)
+library(car)
+library(glmnet)
+set.seed(123)
+```
+
+## Loading/Prepping Data
+```{r}
+# plotting shapefile
+sf <- st_read("Data/weekly/clusterPolys_2_23_update.shp")
+
+# getting lat/long
+coords <- sf %>%
+  st_transform(4326) %>%
+  mutate(centroids = st_centroid(geometry),
+         long = st_coordinates(centroids)[,1],
+         lat = st_coordinates(centroids)[,2]) %>%
+  dplyr::select(-centroids)
+
+clusters <- spatial_block_cv(coords, method = "random", n = 30, relevant_only = T, v = 5)
+
+splits_df <- data.frame()
+for (i in 1:5) {
+  new_df <- assessment(clusters$splits[[i]])
+  new_df$fold <- i
+  splits_df <- rbind(splits_df, new_df)  # Bind all points and fold IDs together
+}
+
+splits_df <- st_drop_geometry(splits_df)
+splits_df <- distinct(splits_df, clust, .keep_all = TRUE)
+
+```
+
+```{r}
+MIRPIR <- read.csv("Data/weekly/wnvMIRPIR1500LagWeeks0.csv")
+```
+
+```{r}
+MIRPIR_2 <- MIRPIR %>%
+  merge(splits_df, by = "clust") %>%
+  mutate(MIRAll = ifelse(MIRAll > 0, 1, 0)) %>% 
+  # Months since June 2010 (first month)
+  mutate(Month = (substr(Date, 6, 7) %>% as.integer()) + 12 * (year-2010)) %>%
+  mutate(week = ifelse(length(wy) == 6, substr(wy, 6, 6), substr(wy, 6, 7) %>% as.numeric()),
+         # weeks since first week
+         w = woy + 52 * (year - 2010)) %>%
+  ungroup()
+
+```
+
+```{r}
+split <- initial_split(MIRPIR_2, prop = 0.8, strata = MIRAll)
+MIRPIR_train <- training(split)
+MIRPIR_test <- testing(split)
+ptrain <- pdata.frame(MIRPIR_train, index = c("clust", "w"))
+ptest <- pdata.frame(MIRPIR_test, index = c("clust", "w"))
+
+mir <- ptrain
+mir <- mir[sample(1:nrow(mir)), ] %>%
+  na.omit() 
+
+```
+
+```{r, fig.height=16, fig.width=16}
+plm_performance  <-  data.frame(model  =  rep("PLM", 5),
+                               fold_id  =  1:5,
+                               RMSE  =  rep(NA, 5),
+                               MAE  =  rep(NA, 5))
+```
+
+```{r, fig.height=16, fig.width=16}
+corrPlotFn <- function(data) {
+  numeric_vars <- sapply(data, is.numeric)
+  numeric_data <- data[, numeric_vars]
+
+  corr_matrix <- cor(numeric_data)
+
+  corrplot(corr_matrix, type = 'lower', diag = FALSE, method = 'number')
+}
+corrPlotFn(mir[,46:nrow("mir")])
+```
+
+## Performign CV
+```{r}
+form <- MIRAll ~ chirpsMean + Humidity.Max + Humidity.Min + Specific.Humidity +
+  Temp.Max.K + Temp.Min.K + VPD.kPa + Precip.Mean.mm...day + NDVI + jrcStandingWater + irrWater +
+  eddi14d + eddi180d + eddi1y + eddi270d + eddi2y + eddi30d + eddi5y + eddi90d + pdsi +
+  spei14d + spei180d + spei1y + spei270d + spei2y + spei30d + spei5y + spei90d + spi14d + spi180d + spi1y + spi270d + spi2y + spi30d + spi5y + spi90d + z + lat + long
+
+for (i in 1:5) {
+  
+  train <- mir[mir$fold != i,]; train <- train[-2]
+  test <- mir[mir$fold == i,]; test <- test[-2]
+  
+    
+    model <- plm(formula = form,
+                    data = train,
+                    model = "pooling")
+    
+   pred0 <- predict(model)
+   rmse <- sqrt(mean((pred0 - train$MIRAll)^2))
+   mae <- mean(abs(pred0 - train$MIRAll))
+  
+  plm_performance[i, "RMSE"] <- rmse
+  plm_performance[i, "MAE"] <- mae
+  
+}
+
+```
+
+
+```{r}
+model1_vif <- vif(model)
+```
+
+# Regularize
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
