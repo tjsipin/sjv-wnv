@@ -1,0 +1,61 @@
+---
+title: "glm"
+output: html_document
+date: "2023-07-27"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_knit$set(root.dir = "/home/jessiejzhou/network-storage/WNV/sjv-wnv")
+```
+
+# MIRPIR data
+
+```{r}
+mir1500 <- read.csv("Data/weekly/wnvMIRPIR1500LagWeeks0.csv")
+mir_split <- initial_split(mir1500, prop = 0.8, strata = clust)
+mir_train <- training(mir_split)
+mir_test <- testing(mir_split)
+mir_train2 <- merge(mir_train, splits_df, by ="clust")
+```
+
+```{r}
+mir <- mir_train2[c("MIRAll", "fold", "Humidity.Max", "Humidity.Min", "Specific.Humidity", "Temp.Max.K", "Temp.Min.K", "VPD.kPa", "Precip.Mean.mm...day", "EVI", "NDVI", "jrcStandingWater")]
+mir <- mir[sample(1:nrow(mir)), ] %>%
+  na.omit()
+
+# df for results of each fold, 5-fold cv
+mir_glm_performance  <-  data.frame(model  =  rep("GLM", 5),
+                               fold_id  =  1:5,
+                               RMSE  =  rep(NA, 5),
+                               MAE  =  rep(NA, 5))
+
+```
+
+##GLM Model
+```{r}
+for (i in 1:5) {
+  
+  train <- mir[mir$fold != i,]; train <- train[-2]
+  test <- mir[mir$fold == i,]; test <- test[-2]
+  
+    
+    model <- glm(formula = MIRAll ~ .,
+                    data = train,
+                    family = gaussian)
+  
+   pred0 <- predict(model, newdata = test, type = "response")
+   rmse <- sqrt(mean((pred0 - test$MIRAll)^2))
+   mae <- mean(abs(pred0 - test$MIRAll))
+  
+  mir_glm_performance[i, "RMSE"] <- rmse
+  mir_glm_performance[i, "MAE"] <- mae
+  
+}
+
+```
+
+### predicting with GLM
+```{r}
+sf_predict <- sf
+sf_predict$predictions <- pred0
+```
